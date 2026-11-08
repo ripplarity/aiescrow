@@ -10,7 +10,7 @@ New-Item -ItemType Directory -Force "$O/plain", "$O/keys" | Out-Null
 $bytes = New-Object byte[] 1048576
 (New-Object Random).NextBytes($bytes)
 [IO.File]::WriteAllBytes("$O/plain/adapter.safetensors", $bytes)
-Set-Content -NoNewline "$O/plain/memories.jsonl" '{"role":"user","text":"remember my cat is called Miso"}'
+[IO.File]::WriteAllText("$O/plain/memories.jsonl", '{"role":"user","text":"remember my cat is called Miso"}')
 
 A keygen vendor --kind ed25519 --out-dir "$O/keys"
 A keygen holder --kind ed25519 --out-dir "$O/keys"
