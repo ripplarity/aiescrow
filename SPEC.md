@@ -31,7 +31,7 @@ Software vendors shut down, get acquired, or deprecate products, and the state u
                  "size": 123, "plaintext_sha256": "<optional>", "encryption": "x25519"}],
   "release_conditions": [{"type": "deadman", "params": {"interval_days": 90, "grace_days": 30}},
                          {"type": "vendor_shutdown"}],
-  "holder": {"name": "demo-holder", "type": "git"},
+  "holder": {"name": "demo-holder", "type": "git", "pubkey": "<hex ed25519>"},
   "signatures": [{"role": "depositor", "pubkey": "<hex>", "sig": "<ed25519 hex>"}]
 }
 ```

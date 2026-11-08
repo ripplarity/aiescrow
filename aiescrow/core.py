@@ -141,7 +141,7 @@ def verify_manifest_sigs(raw: dict, expect_keyid: str) -> None:
         raise UsageError("--expect-keyid is required: no unpinned verification")
     trusted = {expect_keyid.strip().lower()}
     if keyid_of(raw["depositor"]["pubkey"]) not in trusted:
-        raise Tamper("depositor key does not match the pinned keyid")
+        raise Tamper("key does not match pin")
     sigs = raw["signatures"]
     if not sigs:
         raise Tamper("manifest has no signature")

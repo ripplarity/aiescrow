@@ -10,6 +10,38 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from . import __version__
 
+MAX_INT = 2**53 - 1
+
+
+def jcs(o) -> bytes:
+    """RFC 8785 canonical JSON, restricted to str/int/bool/null/list/dict (no floats)."""
+    return _jcs(o).encode("utf-8")
+
+
+def _jcs(o) -> str:
+    if o is None:
+        return "null"
+    if o is True:
+        return "true"
+    if o is False:
+        return "false"
+    if isinstance(o, int):
+        if abs(o) > MAX_INT:
+            raise ValueError("integer outside +-(2^53-1)")
+        return str(o)
+    if isinstance(o, float):
+        raise ValueError("floats are not allowed in attestation JSON")
+    if isinstance(o, str):
+        o.encode("utf-8")
+        return json.dumps(o, ensure_ascii=False)
+    if isinstance(o, list):
+        return "[" + ",".join(_jcs(v) for v in o) + "]"
+    if isinstance(o, dict):
+        keys = sorted(o, key=lambda k: k.encode("utf-16-be"))
+        return "{" + ",".join(_jcs(k) + ":" + _jcs(o[k]) for k in keys) + "}"
+    raise ValueError(f"unsupported type {type(o).__name__}")
+
+
 PAYLOAD_TYPE = "application/vnd.in-toto+json"
 PREDICATE_TYPE = "https://ripplarity.com/attestation/aiescrow/manifest/v1"
 
@@ -53,9 +85,7 @@ def manifest_envelope(
             "artefact_count": len(manifest["artefacts"]),
         },
     }
-    payload = json.dumps(
-        stmt, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
+    payload = jcs(stmt)
     sig = key.sign(pae(PAYLOAD_TYPE, payload))
     return {
         "payloadType": PAYLOAD_TYPE,
