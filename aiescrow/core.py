@@ -185,6 +185,20 @@ def deposit(
     ]
     Manifest.model_validate(m)
     _put_json(h, "manifest.json", m)
+    from .attest import manifest_envelope
+
+    env = manifest_envelope(
+        m,
+        (json.dumps(m, indent=2) + "\n").encode(),
+        depositor_priv,
+        iso(t),
+        iso(now_utc(now)),
+    )
+    _put_json(h, "manifest.dsse.json", env)
+    with tempfile.TemporaryDirectory() as td:
+        pp = Path(td) / "x.hex"
+        pp.write_text(dpub + "\n")
+        h.put(pp, "depositor.pub.hex")
     heartbeat(out, depositor_priv, now=now, git=git)
     return m
 
@@ -192,7 +206,7 @@ def deposit(
 def _put_json(h, name: str, obj: dict):
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "x.json"
-        p.write_text(json.dumps(obj, indent=2) + "\n")
+        p.write_bytes((json.dumps(obj, indent=2) + "\n").encode())
         h.put(p, name)
 
 

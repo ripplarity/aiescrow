@@ -401,3 +401,54 @@ def test_standalone_verifier(env):
         f.write(b"x")
     r = run()
     assert r.returncode == 4 and "FAIL" in r.stdout
+
+
+def _attest_verify(*args):
+    import sys
+
+    v = Path(__file__).parent.parent / "tools" / "attest_verify.py"
+    return subprocess.run(
+        [sys.executable, str(v), *map(str, args)], capture_output=True, text=True
+    ).returncode
+
+
+def test_manifest_dsse_verifies(env):
+    out = env["out"]
+    assert (
+        _attest_verify(
+            out / "manifest.dsse.json",
+            "--key",
+            out / "depositor.pub.hex",
+            "--check-subjects",
+            out,
+        )
+        == 0
+    )
+
+
+def test_manifest_dsse_detects_manifest_change(env):
+    out = env["out"]
+    with open(out / "manifest.json", "ab") as f:
+        f.write(b" ")
+    assert (
+        _attest_verify(
+            out / "manifest.dsse.json",
+            "--key",
+            out / "depositor.pub.hex",
+            "--check-subjects",
+            out,
+        )
+        == 3
+    )
+
+
+def test_attest_verify_copy_identical_to_spec_repo():
+    import hashlib
+
+    spec = Path(__file__).parent.parent.parent / "attest-spec" / "attest_verify.py"
+    if not spec.exists():
+        pytest.skip("attest-spec repo not alongside")
+    mine = Path(__file__).parent.parent / "tools" / "attest_verify.py"
+    assert hashlib.sha256(mine.read_bytes()).hexdigest() == hashlib.sha256(
+        spec.read_bytes()
+    ).hexdigest()
