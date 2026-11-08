@@ -1,0 +1,23 @@
+[project]
+name = "aiescrow"
+version = "0.1.0"
+description = "User-State Escrow v0.1 reference implementation"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = ["cryptography", "typer", "pydantic"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+aiescrow = "aiescrow.cli:app"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["aiescrow", "aiescrow.holder"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
