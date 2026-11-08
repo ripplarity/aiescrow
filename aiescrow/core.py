@@ -36,7 +36,7 @@ class Artefact(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size: int = Field(ge=0)
     plaintext_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    encryption: Literal["age", "x25519"]
+    encryption: Literal["x25519"]
 
 
 class Condition(BaseModel):
@@ -139,9 +139,9 @@ def deposit(
     entries = []
     with tempfile.TemporaryDirectory() as td:
         for f in sorted(p for p in Path(artefacts_dir).iterdir() if p.is_file()):
-            enc = Path(td) / (f.name + ".age")
+            enc = Path(td) / (f.name + ".x25519")
             r = crypto.encrypt_file(f, enc, beneficiary_pub)
-            h.put(enc, f"artefacts/{f.name}.age")
+            h.put(enc, f"artefacts/{f.name}.x25519")
             entries.append(
                 {
                     "name": f.name,
@@ -240,7 +240,7 @@ def check(manifest_path: Path, now: str | None = None) -> dict:
     ):
         raise Tamper("manifest signature invalid")
     for a in raw["artefacts"]:
-        p = root / "artefacts" / (a["name"] + ".age")
+        p = root / "artefacts" / (a["name"] + ".x25519")
         if not p.is_file():
             raise Tamper(f"missing artefact {a['name']}")
         if p.stat().st_size != a["size"] or crypto.sha256_file(p) != a["sha256"]:
@@ -348,7 +348,7 @@ def open_release(
     for a in m["artefacts"]:
         try:
             got = crypto.decrypt_file(
-                root / "artefacts" / (a["name"] + ".age"),
+                root / "artefacts" / (a["name"] + ".x25519"),
                 out / a["name"],
                 beneficiary_priv,
             )

@@ -115,7 +115,7 @@ def test_check_passes(env):
 
 
 def test_tamper_artefact_append(env):
-    with open(env["out"] / "artefacts" / "memories.jsonl.age", "ab") as f:
+    with open(env["out"] / "artefacts" / "memories.jsonl.x25519", "ab") as f:
         f.write(b"x\n")
     with pytest.raises(core.Tamper):
         core.check(env["out"] / "manifest.json", now=T0)
@@ -305,7 +305,7 @@ def test_cli_smoke(tmp_path):
         ).exit_code
         == 3
     )
-    (out / "artefacts" / "m.jsonl.age").write_bytes(b"junk")
+    (out / "artefacts" / "m.jsonl.x25519").write_bytes(b"junk")
     assert (
         r.invoke(app, ["check", str(out / "manifest.json"), "--now", T0]).exit_code == 4
     )
@@ -314,3 +314,90 @@ def test_cli_smoke(tmp_path):
 def test_keys_are_gitignored():
     gi = (Path(__file__).parent.parent / ".gitignore").read_text()
     assert "*.key" in gi
+
+
+# ---- differential tests: independent implementation using only `cryptography` ----
+import sys, hashlib as _hl, struct as _st
+from cryptography.hazmat.primitives import hashes as _h, serialization as _ser
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey as _XP, X25519PublicKey as _XPub
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305 as _CC
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
+
+_RAW = dict(encoding=_ser.Encoding.Raw, format=_ser.PublicFormat.Raw)
+
+
+def _ref_kek(priv_or_eph, peer_pub: bytes, eph_pub: bytes, ben_pub: bytes) -> bytes:
+    shared = priv_or_eph.exchange(_XPub.from_public_bytes(peer_pub))
+    return _HKDF(_h.SHA256(), 32, salt=eph_pub + ben_pub, info=b"aiescrow-v0.1-wrap").derive(shared)
+
+
+def ref_decrypt(blob: bytes, ben_priv_hex: str) -> bytes:
+    priv = _XP.from_private_bytes(bytes.fromhex(ben_priv_hex))
+    ben_pub = priv.public_key().public_bytes(**_RAW)
+    assert blob[:4] == b"AIE1"
+    eph, wn, wrapped, prefix = blob[4:36], blob[36:48], blob[48:96], blob[96:100]
+    ck = _CC(_ref_kek(priv, eph, eph, ben_pub)).decrypt(wn, wrapped, b"AIE1")
+    pos, i, out = 100, 0, b""
+    while pos < len(blob):
+        n = _st.unpack(">I", blob[pos:pos + 4])[0]
+        ct = blob[pos + 4:pos + 4 + n]
+        pos += 4 + n
+        final = pos == len(blob)
+        out += _CC(ck).decrypt(prefix + _st.pack(">Q", i), ct, _st.pack(">QB", i, int(final)))
+        i += 1
+    return out
+
+
+def ref_encrypt(data: bytes, ben_pub_hex: str, chunk: int = 1 << 20) -> bytes:
+    import os as _os
+    ben = bytes.fromhex(ben_pub_hex)
+    eph = _XP.generate()
+    eph_pub = eph.public_key().public_bytes(**_RAW)
+    ck, wn, prefix = _os.urandom(32), _os.urandom(12), _os.urandom(4)
+    wrapped = _CC(_ref_kek(eph, ben, eph_pub, ben)).encrypt(wn, ck, b"AIE1")
+    out = b"AIE1" + eph_pub + wn + wrapped + prefix
+    parts = [data[j:j + chunk] for j in range(0, len(data), chunk)] or [b""]
+    for i, p in enumerate(parts):
+        ct = _CC(ck).encrypt(prefix + _st.pack(">Q", i), p, _st.pack(">QB", i, int(i == len(parts) - 1)))
+        out += _st.pack(">I", len(ct)) + ct
+    return out
+
+
+@pytest.mark.parametrize("size", [0, 10, 1 << 20, (2 << 20) + 123])
+def test_diff_cli_encrypt_reference_decrypt(tmp_path, size):
+    r = CliRunner()
+    k = tmp_path / "k"
+    r.invoke(app, ["keygen", "v", "--kind", "ed25519", "--out-dir", str(k)])
+    r.invoke(app, ["keygen", "u", "--kind", "x25519", "--out-dir", str(k)])
+    plain = tmp_path / "p"
+    plain.mkdir()
+    data = os.urandom(size)
+    (plain / "f.bin").write_bytes(data)
+    tpl = tmp_path / "t.json"
+    tpl.write_text('{"depositor":{"name":"v"},"holder":{"name":"h"}}')
+    res = r.invoke(app, ["deposit", "--manifest", str(tpl), "--artefacts", str(plain),
+                         "--beneficiary-pub", str(k / "u.pub"), "--depositor-key", str(k / "v.key"),
+                         "--out", str(tmp_path / "o"), "--now", T0])
+    assert res.exit_code == 0, res.output
+    blob = (tmp_path / "o" / "artefacts" / "f.bin.x25519").read_bytes()
+    assert ref_decrypt(blob, (k / "u.key").read_text().strip()) == data
+
+
+@pytest.mark.parametrize("size", [0, 77, (1 << 20) + 5])
+def test_diff_reference_encrypt_cli_decrypt(tmp_path, size):
+    priv, pub = crypto.gen_keypair("x25519")
+    data = os.urandom(size)
+    (tmp_path / "e").write_bytes(ref_encrypt(data, pub))
+    assert crypto.decrypt_file(tmp_path / "e", tmp_path / "d", priv) == _hl.sha256(data).hexdigest()
+    assert (tmp_path / "d").read_bytes() == data
+
+
+def test_standalone_verifier(env):
+    script = Path(__file__).parent.parent / "tools" / "verify_manifest.py"
+    mp = str(env["out"] / "manifest.json")
+    run = lambda: subprocess.run([sys.executable, "-I", str(script), mp], capture_output=True, text=True)
+    assert run().returncode == 0
+    with open(env["out"] / "artefacts" / "w.bin.x25519", "ab") as f:
+        f.write(b"x")
+    r = run()
+    assert r.returncode == 4 and "FAIL" in r.stdout

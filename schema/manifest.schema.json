@@ -21,7 +21,7 @@
           "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256 of the encrypted file"},
           "size": {"type": "integer", "minimum": 0, "description": "bytes of the encrypted file"},
           "plaintext_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "encryption": {"enum": ["age", "x25519"]}
+          "encryption": {"enum": ["x25519"]}
         }
       }
     },

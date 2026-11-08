@@ -8,7 +8,7 @@ Status: draft, v0.1. Key words MUST / SHOULD / MAY follow RFC 2119.
 Software vendors shut down, get acquired, or deprecate products, and the state users built inside them (fine-tunes, memories, chat histories, configuration, model artefacts) disappears. User-State Escrow is a small standard by which a vendor commits to deposit that state, encrypted to the user, with a neutral party, and to have it released to the user under stated conditions.
 
 - **Artefact**: one file of user state.
-- **Escrow**: a directory (or git repository) holding `manifest.json`, `heartbeat.json`, `artefacts/<name>.age`, and later `release.json`.
+- **Escrow**: a directory (or git repository) holding `manifest.json`, `heartbeat.json`, `artefacts/<name>.x25519`, and later `release.json`.
 - **Heartbeat**: a periodically re-signed timestamp proving the vendor is alive (a deadman switch).
 
 ## 2. Roles
@@ -36,7 +36,7 @@ Software vendors shut down, get acquired, or deprecate products, and the state u
 }
 ```
 
-Artefact kinds: `model_weights, fine_tune, memory, history, config, other`. Condition types: `vendor_shutdown, acquisition, deprecation, deadman, court_order`. Encryption: `x25519` (the format in section 4) or `age` (reserved name for the stored-file suffix `.age`; v0.1 reference code writes `x25519`).
+Artefact kinds: `model_weights, fine_tune, memory, history, config, other`. Condition types: `vendor_shutdown, acquisition, deprecation, deadman, court_order`. Encryption: `x25519` (the format in section 4); stored files use the suffix `.x25519`. This is not the age file format; interoperability with age is out of scope for v0.1.
 
 `sha256` and `size` describe the encrypted file so anyone can verify integrity without a key. The signature is ed25519 over the canonical JSON (sorted keys, separators `,` and `:`, UTF-8) of the manifest without `signatures`. All timestamps are UTC ISO-8601 (`YYYY-MM-DDThh:mm:ssZ`).
 
@@ -70,6 +70,8 @@ If `holder.pubkey` is present in the manifest, `open` rejects release records si
 ## 8. Verification
 
 Anyone can run `aiescrow check <manifest>` with no secrets. It verifies manifest schema, depositor signature, every artefact size and sha256, heartbeat signature and age. Exit codes: 0 valid, 3 heartbeat expired, 4 tamper or invalid, 5 release refused (release/open only). After `open`, plaintext hashes are compared to `plaintext_sha256`.
+
+A third party without the package can run the single-file `tools/verify_manifest.py <manifest>` (stdlib + `cryptography` only). It checks the manifest signature and artefact sizes/hashes, exiting 0 if valid and 4 otherwise; it does not check heartbeats.
 
 For testing, commands accept `--now <ISO-8601>` to override the clock. This option is TEST-ONLY and MUST NOT be used by production tooling.
 
