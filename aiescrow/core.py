@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -47,6 +48,13 @@ class Condition(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class Holder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    pubkey: str = Field(pattern=r"^[0-9a-f]{64}$")
+    type: str | None = None
+
+
 class Party(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
@@ -69,7 +77,7 @@ class Manifest(BaseModel):
     created_at: str
     artefacts: list[Artefact] = Field(min_length=1)
     release_conditions: list[Condition] = Field(min_length=1)
-    holder: Party
+    holder: Holder
     signatures: list[Signature]
 
 
@@ -81,6 +89,10 @@ class Tamper(EscrowError):
     code = 4
 
 
+class UsageError(EscrowError):
+    code = 2
+
+
 class Expired(EscrowError):
     code = 3
 
@@ -89,12 +101,56 @@ class NotReleasable(EscrowError):
     code = 5
 
 
+def parse_iso(s: str) -> datetime:
+    d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
 def now_utc(now: str | None = None) -> datetime:
-    """UTC time. `now` is a TEST-ONLY override (ISO-8601)."""
+    """UTC time. `now` is a TEST-ONLY override, honoured only when AIESCROW_TEST_CLOCK=1."""
     if now:
-        d = datetime.fromisoformat(now.replace("Z", "+00:00"))
-        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        if os.environ.get("AIESCROW_TEST_CLOCK") != "1":
+            raise UsageError(
+                "--now is a test-only clock override; set AIESCROW_TEST_CLOCK=1 to use it"
+            )
+        return parse_iso(now)
     return datetime.now(timezone.utc)
+
+
+def _no_dupes(pairs):
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise Tamper(f"duplicate JSON key {k!r}")
+        d[k] = v
+    return d
+
+
+def loads(text: str):
+    """json.loads that rejects duplicate keys (parser-dependent last-wins is an attack surface)."""
+    return json.loads(text, object_pairs_hook=_no_dupes)
+
+
+def keyid_of(pub_hex: str) -> str:
+    return hashlib.sha256(bytes.fromhex(pub_hex)).hexdigest()
+
+
+def verify_manifest_sigs(raw: dict, expect_keyid: str) -> None:
+    """Pin the depositor key, and require EVERY signatures[] entry to verify under a trusted keyid."""
+    if not expect_keyid:
+        raise UsageError("--expect-keyid is required: no unpinned verification")
+    trusted = {expect_keyid.strip().lower()}
+    if keyid_of(raw["depositor"]["pubkey"]) not in trusted:
+        raise Tamper("depositor key does not match the pinned keyid")
+    sigs = raw["signatures"]
+    if not sigs:
+        raise Tamper("manifest has no signature")
+    body = _signed_body(raw)
+    for s in sigs:
+        if keyid_of(s["pubkey"]) not in trusted:
+            raise Tamper("signature entry from an untrusted keyid")
+        if s["role"] != "depositor" or not crypto.verify(s["pubkey"], s["sig"], body):
+            raise Tamper("manifest signature invalid")
 
 
 def iso(d: datetime) -> str:
@@ -223,7 +279,7 @@ def heartbeat(
     root: Path, depositor_priv: str, now: str | None = None, git: bool = False
 ) -> dict:
     root = Path(root)
-    m = json.loads((root / "manifest.json").read_text())
+    m = loads((root / "manifest.json").read_text())
     if crypto.ed_pub_from_priv(depositor_priv) != m["depositor"]["pubkey"]:
         raise EscrowError("key does not match manifest depositor")
     body = {"escrow_id": m["escrow_id"], "timestamp": iso(now_utc(now))}
@@ -236,23 +292,18 @@ def heartbeat(
     return hb
 
 
-def check(manifest_path: Path, now: str | None = None) -> dict:
+def check(
+    manifest_path: Path, now: str | None = None, expect_keyid: str | None = None
+) -> dict:
     """Raises Tamper (4) or Expired (3). Returns a status dict on success."""
     mp = Path(manifest_path)
     root = mp.parent
     try:
-        raw = json.loads(mp.read_text())
+        raw = loads(mp.read_text())
         Manifest.model_validate(raw)
     except Exception as e:
         raise Tamper(f"manifest invalid: {e}") from None
-    sigs = raw["signatures"]
-    if not any(
-        s["role"] == "depositor"
-        and s["pubkey"] == raw["depositor"]["pubkey"]
-        and crypto.verify(s["pubkey"], s["sig"], _signed_body(raw))
-        for s in sigs
-    ):
-        raise Tamper("manifest signature invalid")
+    verify_manifest_sigs(raw, expect_keyid)
     for a in raw["artefacts"]:
         p = root / "artefacts" / (a["name"] + ".x25519")
         if not p.is_file():
@@ -262,7 +313,7 @@ def check(manifest_path: Path, now: str | None = None) -> dict:
     hp = root / "heartbeat.json"
     if not hp.is_file():
         raise Expired("no heartbeat")
-    hb = json.loads(hp.read_text())
+    hb = loads(hp.read_text())
     if (
         hb.get("escrow_id") != raw["escrow_id"]
         or hb.get("pubkey") != raw["depositor"]["pubkey"]
@@ -273,7 +324,7 @@ def check(manifest_path: Path, now: str | None = None) -> dict:
         )
     ):
         raise Tamper("heartbeat signature invalid")
-    age = now_utc(now) - now_utc(hb["timestamp"])
+    age = now_utc(now) - parse_iso(hb["timestamp"])
     limit = timedelta(days=_interval(raw))
     if age > limit:
         raise Expired(f"heartbeat expired: age {age.days}d > {limit.days}d")
@@ -291,11 +342,12 @@ def release(
     now: str | None = None,
     attestation: str = "",
     git: bool = False,
+    expect_keyid: str | None = None,
 ) -> dict:
     root = Path(root)
-    m = json.loads((root / "manifest.json").read_text())
+    m = loads((root / "manifest.json").read_text())
     try:
-        check(root / "manifest.json", now=now)
+        check(root / "manifest.json", now=now, expect_keyid=expect_keyid)
         hb_expired = False
     except Expired:
         hb_expired = True
@@ -313,11 +365,11 @@ def release(
             raise NotReleasable("deadman not a declared release condition")
         if not hb_expired:
             raise NotReleasable("heartbeat is still fresh; deadman not triggered")
-        hb = json.loads((root / "heartbeat.json").read_text())
+        hb = loads((root / "heartbeat.json").read_text())
         rec["holder_attestation"] = attestation or (
             f"holder observed no valid heartbeat since {hb['timestamp']}"
         )
-        base = now_utc(hb["timestamp"]) + timedelta(days=_interval(m))
+        base = parse_iso(hb["timestamp"]) + timedelta(days=_interval(m))
         rec["contest_until"] = iso(
             base + timedelta(days=_interval(m, "grace_days", DEFAULT_GRACE_DAYS))
         )
@@ -329,6 +381,8 @@ def release(
     else:
         raise NotReleasable(f"unknown condition {condition}")
     rec["pubkey"] = crypto.ed_pub_from_priv(holder_priv)
+    if rec["pubkey"] != m["holder"]["pubkey"]:
+        raise NotReleasable("release key is not the manifest holder key")
     rec["sig"] = crypto.sign(
         holder_priv, canon({k: v for k, v in rec.items() if k != "sig"})
     )
@@ -337,24 +391,28 @@ def release(
 
 
 def open_release(
-    root: Path, beneficiary_priv: str, out: Path, now: str | None = None
+    root: Path,
+    beneficiary_priv: str,
+    out: Path,
+    now: str | None = None,
+    expect_keyid: str | None = None,
 ) -> list[dict]:
     root = Path(root)
     rp = root / "release.json"
     if not rp.is_file():
         raise NotReleasable("no release record; nothing to open")
-    rec = json.loads(rp.read_text())
+    rec = loads(rp.read_text())
     if not crypto.verify(
         rec["pubkey"], rec["sig"], canon({k: v for k, v in rec.items() if k != "sig"})
     ):
         raise Tamper("release record signature invalid")
-    m = json.loads((root / "manifest.json").read_text())
-    hp = m["holder"].get("pubkey")
-    if hp and hp != rec["pubkey"]:
+    m = loads((root / "manifest.json").read_text())
+    verify_manifest_sigs(m, expect_keyid)
+    if m["holder"]["pubkey"] != rec["pubkey"]:
         raise Tamper("release signed by a key other than the manifest holder")
     if rec["manifest_sha256"] != hashlib.sha256(_signed_body(m)).hexdigest():
         raise Tamper("release record does not match manifest")
-    if rec.get("contest_until") and now_utc(now) < now_utc(rec["contest_until"]):
+    if rec.get("contest_until") and now_utc(now) < parse_iso(rec["contest_until"]):
         raise NotReleasable(f"contest window open until {rec['contest_until']}")
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)

@@ -12,7 +12,16 @@ from . import core, crypto
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="User-State Escrow v0.1"
 )
-NOW = typer.Option(None, "--now", help="TEST ONLY: override the UTC clock (ISO-8601).")
+NOW = typer.Option(
+    None,
+    "--now",
+    help="TEST ONLY: override the UTC clock (ISO-8601); needs env AIESCROW_TEST_CLOCK=1.",
+)
+KEYID = typer.Option(
+    ...,
+    "--expect-keyid",
+    help="trusted depositor keyid (sha256 hex of the raw ed25519 public key); see `aiescrow keyid`",
+)
 
 
 def _run(fn):
@@ -54,7 +63,7 @@ def deposit(
     """Encrypt artefacts, sign the manifest, hand to the holder."""
     m = _run(
         lambda: core.deposit(
-            json.loads(manifest.read_text()),
+            core.loads(manifest.read_text()),
             artefacts,
             core.read_key(beneficiary_pub),
             core.read_key(depositor_key),
@@ -79,9 +88,15 @@ def heartbeat(
 
 
 @app.command()
-def check(manifest: Path, now: str | None = NOW):
-    """Exit 0 valid, 3 heartbeat expired, 4 tamper."""
-    s = _run(lambda: core.check(manifest, now))
+def keyid(pubfile: str):
+    """Print the keyid (sha256 of the raw public key) of an ed25519 .pub file or hex string."""
+    typer.echo(core.keyid_of(core.read_key(pubfile)))
+
+
+@app.command()
+def check(manifest: Path, expect_keyid: str = KEYID, now: str | None = NOW):
+    """Exit 0 valid, 2 usage, 3 heartbeat expired, 4 tamper (incl. any untrusted/invalid signature)."""
+    s = _run(lambda: core.check(manifest, now, expect_keyid))
     typer.echo(
         f"OK {s['escrow_id']} artefacts={s['artefacts']} heartbeat_age_days={s['heartbeat_age_days']}"
     )
@@ -94,12 +109,13 @@ def release(
     holder_key: str = typer.Option(...),
     attestation: str = "",
     git: bool = False,
+    expect_keyid: str = KEYID,
     now: str | None = NOW,
 ):
     """Write a holder-signed release record."""
     r = _run(
         lambda: core.release(
-            dir, condition, core.read_key(holder_key), now, attestation, git
+            dir, condition, core.read_key(holder_key), now, attestation, git, expect_keyid
         )
     )
     typer.echo(f"RELEASED condition={r['condition']} at={r['released_at']}")
@@ -110,13 +126,14 @@ def open_(
     dir: Path = typer.Option(...),
     key: str = typer.Option(..., help="beneficiary X25519 private key"),
     out: Path = typer.Option(...),
+    expect_keyid: str = KEYID,
     now: str | None = NOW,
 ):
     """Decrypt released artefacts (beneficiary)."""
 
     def go():
         k = core.read_key(key)
-        return core.open_release(dir, k, out, now)
+        return core.open_release(dir, k, out, now, expect_keyid)
 
     res = _run(go)
     for r in res:

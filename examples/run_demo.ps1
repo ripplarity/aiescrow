@@ -1,5 +1,6 @@
 # End-to-end demo (PowerShell). --now is a TEST-ONLY clock override.
 $ErrorActionPreference = "Stop"
+$env:AIESCROW_TEST_CLOCK = "1"   # required for the test-only --now override
 Set-Location (Join-Path $PSScriptRoot "..")
 $py = if ($env:PYTHON) { $env:PYTHON } else { "python" }
 function A { & $py -m aiescrow @args; if ($LASTEXITCODE -ne 0) { throw "aiescrow failed: $args" } }
@@ -16,14 +17,23 @@ A keygen vendor --kind ed25519 --out-dir "$O/keys"
 A keygen holder --kind ed25519 --out-dir "$O/keys"
 A keygen user --kind x25519 --out-dir "$O/keys"
 
-$tpl = '{"depositor":{"name":"ollama-finetune-demo"},"holder":{"name":"demo-holder","type":"local"},"artefact_kinds":{"adapter.safetensors":"fine_tune","memories.jsonl":"memory"},"release_conditions":[{"type":"deadman","params":{"interval_days":90,"grace_days":30}},{"type":"vendor_shutdown"}]}'
+$KID = (& $py -m aiescrow keyid "$O/keys/vendor.pub").Trim()
+$tpl = [ordered]@{
+  depositor = @{ name = "ollama-finetune-demo" }
+  holder = @{ name = "demo-holder"; type = "local"; pubkey = (Get-Content "$O/keys/holder.pub").Trim() }
+  artefact_kinds = @{ "adapter.safetensors" = "fine_tune"; "memories.jsonl" = "memory" }
+  release_conditions = @(
+    @{ type = "deadman"; params = @{ interval_days = 90; grace_days = 30 } },
+    @{ type = "vendor_shutdown" }
+  )
+} | ConvertTo-Json -Depth 6
 [IO.File]::WriteAllText("$O/template.json", $tpl)
 
 A deposit --manifest "$O/template.json" --artefacts "$O/plain" --beneficiary-pub "$O/keys/user.pub" --depositor-key "$O/keys/vendor.key" --out $O --now 2026-01-01T00:00:00Z
 A heartbeat --dir $O --depositor-key "$O/keys/vendor.key" --now 2026-02-01T00:00:00Z
-A check "$O/manifest.json" --now 2026-03-01T00:00:00Z
-A release --dir $O --condition deadman --holder-key "$O/keys/holder.key" --now 2026-06-01T00:00:00Z
-A open --dir $O --key "$O/keys/user.key" --out "$O/restored" --now 2026-07-01T00:00:00Z
+A check "$O/manifest.json" --expect-keyid $KID --now 2026-03-01T00:00:00Z
+A release --dir $O --condition deadman --holder-key "$O/keys/holder.key" --expect-keyid $KID --now 2026-06-01T00:00:00Z
+A open --dir $O --key "$O/keys/user.key" --out "$O/restored" --expect-keyid $KID --now 2026-07-01T00:00:00Z
 
 foreach ($f in "adapter.safetensors", "memories.jsonl") {
   $a = (Get-FileHash "$O/plain/$f").Hash; $b = (Get-FileHash "$O/restored/$f").Hash

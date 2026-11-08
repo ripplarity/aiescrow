@@ -36,7 +36,7 @@
         }
       }
     },
-    "holder": {"$ref": "#/$defs/party"},
+    "holder": {"$ref": "#/$defs/holder"},
     "signatures": {
       "type": "array",
       "items": {
@@ -51,6 +51,14 @@
     }
   },
   "$defs": {
+    "holder": {
+      "type": "object", "additionalProperties": false, "required": ["name", "pubkey"],
+      "properties": {
+        "name": {"type": "string"},
+        "pubkey": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "type": {"type": "string"}
+      }
+    },
     "party": {
       "type": "object", "additionalProperties": false, "required": ["name"],
       "properties": {

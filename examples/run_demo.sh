@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end demo. --now is a TEST-ONLY clock override used to simulate time passing.
 set -euo pipefail
+export AIESCROW_TEST_CLOCK=1   # required for the test-only --now override
 cd "$(dirname "$0")/.."
 PY="${PYTHON:-python}"
 A="$PY -m aiescrow"
@@ -15,9 +16,11 @@ $A keygen vendor --kind ed25519 --out-dir "$O/keys"
 $A keygen holder --kind ed25519 --out-dir "$O/keys"
 $A keygen user   --kind x25519  --out-dir "$O/keys"
 
-cat > "$O/template.json" <<'EOF'
+HPUB=$(cat "$O/keys/holder.pub")
+KID=$($PY -m aiescrow keyid "$O/keys/vendor.pub")   # trusted pin, obtained out of band
+cat > "$O/template.json" <<EOF
 {"depositor":{"name":"ollama-finetune-demo"},
- "holder":{"name":"demo-holder","type":"local"},
+ "holder":{"name":"demo-holder","type":"local","pubkey":"$HPUB"},
  "artefact_kinds":{"adapter.safetensors":"fine_tune","memories.jsonl":"memory"},
  "release_conditions":[{"type":"deadman","params":{"interval_days":90,"grace_days":30}},
                        {"type":"vendor_shutdown"}]}
@@ -27,11 +30,11 @@ $A deposit --manifest "$O/template.json" --artefacts "$O/plain" \
   --beneficiary-pub "$O/keys/user.pub" --depositor-key "$O/keys/vendor.key" \
   --out "$O" --now 2026-01-01T00:00:00Z
 $A heartbeat --dir "$O" --depositor-key "$O/keys/vendor.key" --now 2026-02-01T00:00:00Z
-$A check "$O/manifest.json" --now 2026-03-01T00:00:00Z
+$A check "$O/manifest.json" --expect-keyid "$KID" --now 2026-03-01T00:00:00Z
 
 # vendor goes silent; deadman after 90 days + 30 days grace
-$A release --dir "$O" --condition deadman --holder-key "$O/keys/holder.key" --now 2026-06-01T00:00:00Z
-$A open --dir "$O" --key "$O/keys/user.key" --out "$O/restored" --now 2026-07-01T00:00:00Z
+$A release --dir "$O" --condition deadman --holder-key "$O/keys/holder.key" --expect-keyid "$KID" --now 2026-06-01T00:00:00Z
+$A open --dir "$O" --key "$O/keys/user.key" --out "$O/restored" --expect-keyid "$KID" --now 2026-07-01T00:00:00Z
 
 # independent hash comparison
 for f in adapter.safetensors memories.jsonl; do

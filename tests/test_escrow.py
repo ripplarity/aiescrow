@@ -15,6 +15,18 @@ SCHEMA = Path(__file__).parent.parent / "schema" / "manifest.schema.json"
 T0 = "2026-01-01T00:00:00Z"
 
 
+@pytest.fixture(autouse=True)
+def _test_clock(monkeypatch):
+    monkeypatch.setenv("AIESCROW_TEST_CLOCK", "1")
+
+
+def _pin(root):
+    """Trusted keyid for tests: the depositor key we generated (out-of-band pin stand-in)."""
+    p = Path(root)
+    p = p if p.suffix == ".json" else p / "manifest.json"
+    return core.keyid_of(core.loads(p.read_text())["depositor"]["pubkey"])
+
+
 @pytest.fixture
 def env(tmp_path):
     vp, vpub = crypto.gen_keypair("ed25519")
@@ -27,7 +39,7 @@ def env(tmp_path):
     out = tmp_path / "out"
     tpl = {
         "depositor": {"name": "v"},
-        "holder": {"name": "h"},
+        "holder": {"name": "h", "pubkey": hpub},
         "artefact_kinds": {"w.bin": "fine_tune", "memories.jsonl": "memory"},
         "release_conditions": [
             {"type": "deadman", "params": {"interval_days": 90, "grace_days": 30}},
@@ -107,7 +119,7 @@ def test_wrong_key_fails(tmp_path):
 
 def test_check_passes(env):
     assert (
-        core.check(env["out"] / "manifest.json", now="2026-02-01T00:00:00Z")[
+        core.check(env["out"] / "manifest.json", now="2026-02-01T00:00:00Z", expect_keyid=_pin(env["out"] / "manifest.json"))[
             "artefacts"
         ]
         == 2
@@ -118,7 +130,7 @@ def test_tamper_artefact_append(env):
     with open(env["out"] / "artefacts" / "memories.jsonl.x25519", "ab") as f:
         f.write(b"x\n")
     with pytest.raises(core.Tamper):
-        core.check(env["out"] / "manifest.json", now=T0)
+        core.check(env["out"] / "manifest.json", now=T0, expect_keyid=_pin(env["out"] / "manifest.json"))
 
 
 def test_tamper_manifest(env):
@@ -127,7 +139,7 @@ def test_tamper_manifest(env):
     m["depositor"]["name"] = "evil"
     p.write_text(json.dumps(m))
     with pytest.raises(core.Tamper):
-        core.check(p, now=T0)
+        core.check(p, now=T0, expect_keyid=_pin(p))
 
 
 def test_truncated_ciphertext_detected_on_open(tmp_path):
@@ -144,9 +156,9 @@ def test_truncated_ciphertext_detected_on_open(tmp_path):
 
 def test_heartbeat_expiry_with_now(env):
     with pytest.raises(core.Expired):
-        core.check(env["out"] / "manifest.json", now="2026-05-01T00:00:00Z")
+        core.check(env["out"] / "manifest.json", now="2026-05-01T00:00:00Z", expect_keyid=_pin(env["out"] / "manifest.json"))
     core.heartbeat(env["out"], env["vp"], now="2026-05-01T00:00:00Z")
-    core.check(env["out"] / "manifest.json", now="2026-05-02T00:00:00Z")
+    core.check(env["out"] / "manifest.json", now="2026-05-02T00:00:00Z", expect_keyid=_pin(env["out"] / "manifest.json"))
 
 
 def test_heartbeat_wrong_key_refused(env):
@@ -157,11 +169,11 @@ def test_heartbeat_wrong_key_refused(env):
 
 def test_release_refused_while_fresh(env):
     with pytest.raises(core.NotReleasable):
-        core.release(env["out"], "deadman", env["hp"], now="2026-02-01T00:00:00Z")
+        core.release(env["out"], "deadman", env["hp"], now="2026-02-01T00:00:00Z", expect_keyid=_pin(env["out"]))
 
 
 def test_release_signature_and_open(env):
-    rec = core.release(env["out"], "deadman", env["hp"], now="2026-06-01T00:00:00Z")
+    rec = core.release(env["out"], "deadman", env["hp"], now="2026-06-01T00:00:00Z", expect_keyid=_pin(env["out"]))
     assert (
         rec["condition"] == "deadman"
         and rec["holder_attestation"]
@@ -170,8 +182,7 @@ def test_release_signature_and_open(env):
     body = {k: v for k, v in rec.items() if k != "sig"}
     assert crypto.verify(rec["pubkey"], rec["sig"], core.canon(body))
     res = core.open_release(
-        env["out"], env["bp"], env["tmp"] / "r", now="2026-07-01T00:00:00Z"
-    )
+        env["out"], env["bp"], env["tmp"] / "r", now="2026-07-01T00:00:00Z", expect_keyid=_pin(env["out"]))
     assert {r["name"] for r in res} == {"w.bin", "memories.jsonl"}
     assert (env["tmp"] / "r" / "w.bin").read_bytes() == (
         env["plain"] / "w.bin"
@@ -179,43 +190,40 @@ def test_release_signature_and_open(env):
 
 
 def test_open_blocked_during_contest_window(env):
-    core.release(env["out"], "deadman", env["hp"], now="2026-04-10T00:00:00Z")
+    core.release(env["out"], "deadman", env["hp"], now="2026-04-10T00:00:00Z", expect_keyid=_pin(env["out"]))
     with pytest.raises(core.NotReleasable):
         core.open_release(
-            env["out"], env["bp"], env["tmp"] / "r", now="2026-04-11T00:00:00Z"
-        )
+            env["out"], env["bp"], env["tmp"] / "r", now="2026-04-11T00:00:00Z", expect_keyid=_pin(env["out"]))
 
 
 def test_forged_release_rejected(env):
-    core.release(env["out"], "deadman", env["hp"], now="2026-06-01T00:00:00Z")
+    core.release(env["out"], "deadman", env["hp"], now="2026-06-01T00:00:00Z", expect_keyid=_pin(env["out"]))
     p = env["out"] / "release.json"
     r = json.loads(p.read_text())
     r["released_at"] = "2020-01-01T00:00:00Z"
     p.write_text(json.dumps(r))
     with pytest.raises(core.Tamper):
         core.open_release(
-            env["out"], env["bp"], env["tmp"] / "r", now="2026-07-01T00:00:00Z"
-        )
+            env["out"], env["bp"], env["tmp"] / "r", now="2026-07-01T00:00:00Z", expect_keyid=_pin(env["out"]))
 
 
 def test_open_without_release_and_wrong_key(env):
     with pytest.raises(core.NotReleasable):
-        core.open_release(env["out"], env["bp"], env["tmp"] / "r")
+        core.open_release(env["out"], env["bp"], env["tmp"] / "r", expect_keyid=_pin(env["out"]))
     core.release(
         env["out"],
         "shutdown",
         env["hp"],
         now=T0,
-        attestation="vendor announced closure",
-    )
+        attestation="vendor announced closure", expect_keyid=_pin(env["out"]))
     other, _ = crypto.gen_keypair("x25519")
     with pytest.raises(core.EscrowError, match="recovery is out of scope"):
-        core.open_release(env["out"], other, env["tmp"] / "r2", now=T0)
+        core.open_release(env["out"], other, env["tmp"] / "r2", now=T0, expect_keyid=_pin(env["out"]))
 
 
 def test_shutdown_requires_attestation(env):
     with pytest.raises(core.NotReleasable):
-        core.release(env["out"], "shutdown", env["hp"], now=T0)
+        core.release(env["out"], "shutdown", env["hp"], now=T0, expect_keyid=_pin(env["out"]))
 
 
 def test_local_holder_interface_and_escape(tmp_path):
@@ -246,7 +254,7 @@ def test_full_flow_on_git_holder(tmp_path):
     (plain / "m.jsonl").write_text("{}\n")
     out = tmp_path / "repo"
     core.deposit(
-        {"depositor": {"name": "v"}, "holder": {"name": "g", "type": "git"}},
+        {"depositor": {"name": "v"}, "holder": {"name": "g", "type": "git", "pubkey": "a" * 64}},
         plain,
         bpub,
         vp,
@@ -254,7 +262,7 @@ def test_full_flow_on_git_holder(tmp_path):
         now=T0,
         git=True,
     )
-    core.check(out / "manifest.json", now=T0)
+    core.check(out / "manifest.json", now=T0, expect_keyid=_pin(out / "manifest.json"))
     log = subprocess.run(
         ["git", "log", "--format=%s"], cwd=out, capture_output=True, text=True
     ).stdout
@@ -275,7 +283,7 @@ def test_cli_smoke(tmp_path):
     plain.mkdir()
     (plain / "m.jsonl").write_text("{}\n")
     tpl = tmp_path / "t.json"
-    tpl.write_text('{"depositor":{"name":"v"},"holder":{"name":"h"}}')
+    tpl.write_text('{"depositor":{"name":"v"},"holder":{"name":"h","pubkey":"%s"}}' % ("a" * 64))
     out = tmp_path / "o"
     res = r.invoke(
         app,
@@ -296,18 +304,19 @@ def test_cli_smoke(tmp_path):
         ],
     )
     assert res.exit_code == 0, res.output
+    K = r.invoke(app, ["keyid", str(k / "v.pub")]).output.strip()
     assert (
-        r.invoke(app, ["check", str(out / "manifest.json"), "--now", T0]).exit_code == 0
+        r.invoke(app, ["check", str(out / "manifest.json"), "--expect-keyid", K, "--now", T0]).exit_code == 0
     )
     assert (
         r.invoke(
-            app, ["check", str(out / "manifest.json"), "--now", "2027-01-01T00:00:00Z"]
+            app, ["check", str(out / "manifest.json"), "--expect-keyid", K, "--now", "2027-01-01T00:00:00Z"]
         ).exit_code
         == 3
     )
     (out / "artefacts" / "m.jsonl.x25519").write_bytes(b"junk")
     assert (
-        r.invoke(app, ["check", str(out / "manifest.json"), "--now", T0]).exit_code == 4
+        r.invoke(app, ["check", str(out / "manifest.json"), "--expect-keyid", K, "--now", T0]).exit_code == 4
     )
 
 
@@ -374,7 +383,7 @@ def test_diff_cli_encrypt_reference_decrypt(tmp_path, size):
     data = os.urandom(size)
     (plain / "f.bin").write_bytes(data)
     tpl = tmp_path / "t.json"
-    tpl.write_text('{"depositor":{"name":"v"},"holder":{"name":"h"}}')
+    tpl.write_text('{"depositor":{"name":"v"},"holder":{"name":"h","pubkey":"%s"}}' % ("a" * 64))
     res = r.invoke(app, ["deposit", "--manifest", str(tpl), "--artefacts", str(plain),
                          "--beneficiary-pub", str(k / "u.pub"), "--depositor-key", str(k / "v.key"),
                          "--out", str(tmp_path / "o"), "--now", T0])
@@ -395,7 +404,8 @@ def test_diff_reference_encrypt_cli_decrypt(tmp_path, size):
 def test_standalone_verifier(env):
     script = Path(__file__).parent.parent / "tools" / "verify_manifest.py"
     mp = str(env["out"] / "manifest.json")
-    run = lambda: subprocess.run([sys.executable, "-I", str(script), mp], capture_output=True, text=True)
+    kid = _pin(env["out"])
+    run = lambda: subprocess.run([sys.executable, "-I", str(script), mp, "--expect-keyid", kid], capture_output=True, text=True)
     assert run().returncode == 0
     with open(env["out"] / "artefacts" / "w.bin.x25519", "ab") as f:
         f.write(b"x")
@@ -452,3 +462,120 @@ def test_attest_verify_copy_identical_to_spec_repo():
     assert hashlib.sha256(mine.read_bytes()).hexdigest() == hashlib.sha256(
         spec.read_bytes()
     ).hexdigest()
+
+
+def _write_manifest(env, m):
+    (env["out"] / "manifest.json").write_text(json.dumps(m, indent=2) + "\n")
+
+
+def test_forged_key_resigned_manifest_fails_when_pinned(env):
+    good = _pin(env["out"])
+    m = core.loads((env["out"] / "manifest.json").read_text())
+    evil_priv, evil_pub = crypto.gen_keypair("ed25519")
+    m["escrow_id"] = "FORGED"
+    m["depositor"]["pubkey"] = evil_pub
+    m["signatures"] = [
+        {
+            "role": "depositor",
+            "pubkey": evil_pub,
+            "sig": crypto.sign(evil_priv, core._signed_body(m)),
+        }
+    ]
+    _write_manifest(env, m)
+    (env["out"] / "depositor.pub.hex").write_text(evil_pub + "\n")  # beside, untrusted
+    with pytest.raises(core.Tamper):
+        core.check(env["out"] / "manifest.json", now=T0, expect_keyid=good)
+    script = Path(__file__).parent.parent / "tools" / "verify_manifest.py"
+    r = subprocess.run(
+        [sys.executable, "-I", str(script), str(env["out"] / "manifest.json"), "--expect-keyid", good],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 4
+    # the DSSE attestation signed by the real key also fails against a forged beside-key pin
+    rc = _attest_verify(
+        env["out"] / "manifest.dsse.json",
+        "--key",
+        env["out"] / "depositor.pub.hex",
+        "--expect-keyid",
+        good,
+    )
+    assert rc == 2
+
+
+def test_check_requires_pin(env):
+    with pytest.raises(core.UsageError):
+        core.check(env["out"] / "manifest.json", now=T0)
+    r = CliRunner().invoke(app, ["check", str(env["out"] / "manifest.json")])
+    assert r.exit_code != 0
+
+
+def test_now_rejected_without_test_clock_env(env, monkeypatch):
+    monkeypatch.delenv("AIESCROW_TEST_CLOCK")
+    with pytest.raises(core.UsageError):
+        core.check(env["out"] / "manifest.json", now=T0, expect_keyid=_pin(env["out"]))
+    r = CliRunner().invoke(
+        app,
+        [
+            "check",
+            str(env["out"] / "manifest.json"),
+            "--expect-keyid",
+            _pin(env["out"]),
+            "--now",
+            "2030-01-01T00:00:00Z",
+        ],
+    )
+    assert r.exit_code == 2
+    assert "AIESCROW_TEST_CLOCK" in r.output
+
+
+def test_holder_pubkey_required(env):
+    with pytest.raises(ValidationError):
+        m = copy.deepcopy(env["m"])
+        del m["holder"]["pubkey"]
+        core.Manifest.model_validate(m)
+    s = json.loads(SCHEMA.read_text())
+    assert "pubkey" in s["$defs"]["holder"]["required"]
+
+
+def test_release_requires_manifest_holder_key(env):
+    other, _ = crypto.gen_keypair("ed25519")
+    with pytest.raises(core.NotReleasable):
+        core.release(env["out"], "deadman", other, now="2026-06-01T00:00:00Z", expect_keyid=_pin(env["out"]))
+
+
+def test_open_rejects_release_from_non_holder(env):
+    core.release(env["out"], "deadman", env["hp"], now="2026-06-01T00:00:00Z", expect_keyid=_pin(env["out"]))
+    other, opub = crypto.gen_keypair("ed25519")
+    rec = core.loads((env["out"] / "release.json").read_text())
+    rec["pubkey"] = opub
+    rec["sig"] = crypto.sign(other, core.canon({k: v for k, v in rec.items() if k != "sig"}))
+    (env["out"] / "release.json").write_text(json.dumps(rec))
+    with pytest.raises(core.Tamper):
+        core.open_release(env["out"], env["bp"], env["tmp"] / "r", now="2026-07-01T00:00:00Z", expect_keyid=_pin(env["out"]))
+
+
+def test_extra_signature_entry_rejected(env):
+    m = core.loads((env["out"] / "manifest.json").read_text())
+    ep, epub = crypto.gen_keypair("ed25519")
+    m["signatures"].append({"role": "depositor", "pubkey": epub, "sig": crypto.sign(ep, core._signed_body(m))})
+    _write_manifest(env, m)
+    with pytest.raises(core.Tamper):
+        core.check(env["out"] / "manifest.json", now=T0, expect_keyid=_pin_orig(env))
+    m["signatures"][-1] = dict(m["signatures"][0], sig="0" * 128)
+    _write_manifest(env, m)
+    with pytest.raises(core.Tamper):
+        core.check(env["out"] / "manifest.json", now=T0, expect_keyid=_pin_orig(env))
+
+
+def _pin_orig(env):
+    return core.keyid_of(crypto.ed_pub_from_priv(env["vp"]))
+
+
+def test_duplicate_json_keys_rejected(env):
+    txt = (env["out"] / "manifest.json").read_text()
+    (env["out"] / "manifest.json").write_text(txt.replace('{\n', '{\n  "escrow_id": "dup",\n', 1))
+    with pytest.raises(core.Tamper):
+        core.check(env["out"] / "manifest.json", now=T0, expect_keyid=_pin_orig(env))
+    with pytest.raises(core.Tamper):
+        core.loads('{"a":1,"a":2}')
