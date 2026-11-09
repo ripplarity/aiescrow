@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="aiescrow">
+  <title>aiescrow</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2A1B6E"/><stop offset="1" stop-color="#0B4A55"/></linearGradient>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7DFFD4"/><stop offset="1" stop-color="#8B7CFF"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="60" fill="url(#bg)"/>
+  <rect x="62" y="70" width="132" height="116" rx="18" fill="none" stroke="#FFFFFF" stroke-width="12"/><circle cx="128" cy="128" r="26" fill="none" stroke="url(#acc)" stroke-width="12"/><path d="M128 102 V114 M128 142 V154 M102 128 H114 M142 128 H154" stroke="url(#acc)" stroke-width="8" stroke-linecap="round"/>
+</svg>
