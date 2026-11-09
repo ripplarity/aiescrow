@@ -41,11 +41,7 @@ else
   find "$WT" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 fi
 
-cat > "$T/template.json" <<JSON
-{"depositor":{"name":"$NAME"},
- "holder":{"name":"escrow branch of $NAME","type":"git","pubkey":"$ESCROW_HOLDER_PUB"},
- "release_conditions":[{"type":"deadman","params":{"interval_days":90,"grace_days":30}}]}
-JSON
+NAME="$NAME" HPUB="$ESCROW_HOLDER_PUB" $PY -c 'import json,os; n=os.environ["NAME"]; print(json.dumps({"depositor":{"name":n},"holder":{"name":"escrow branch of "+n,"type":"git","pubkey":os.environ["HPUB"]},"release_conditions":[{"type":"deadman","params":{"interval_days":90,"grace_days":30}}]}))' > "$T/template.json"
 
 # 4. deposit, heartbeat, check
 $A deposit --manifest "$T/template.json" --artefacts "$T/plain" \

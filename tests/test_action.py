@@ -87,3 +87,13 @@ def test_private_key_not_committed_to_branch(sim):
     assert run(repo, env).returncode == 0
     r = subprocess.run(["git", "grep", "-I", "-q", env["ESCROW_DEPOSITOR_KEY"], "escrow"], cwd=repo)
     assert r.returncode == 1  # no match
+
+
+def test_name_with_quote_and_backslash(sim):
+    repo, env, g = sim
+    r = run(repo, {**env, "ESCROW_NAME": 'my "proj" \ x'})
+    assert r.returncode == 0 and "CHECK OK" in r.stdout, r.stderr
+    import json
+
+    m = json.loads(g("show", "escrow:manifest.json").stdout)
+    assert m["depositor"]["name"] == 'my "proj" \ x'
