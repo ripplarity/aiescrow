@@ -1,0 +1,39 @@
+name: "aiescrow release deposit"
+description: "On release, deposit user-state artefacts to an aiescrow git holder (branch `escrow`), heartbeat, and run `aiescrow check`."
+inputs:
+  artefacts:
+    description: "Glob of files to deposit, relative to the workspace (e.g. state/**/*.json)"
+    required: true
+  beneficiary_pub:
+    description: "X25519 public key (hex) of the beneficiary"
+    required: true
+  depositor_key:
+    description: "ed25519 signing key (hex). Pass a secret: ${{ secrets.ESCROW_DEPOSITOR_KEY }}"
+    required: true
+  holder_pub:
+    description: "ed25519 public key (hex) of the holder, recorded in the manifest"
+    required: true
+  expect_keyid:
+    description: "Trusted depositor keyid (sha256 hex of the raw public key), published out of band"
+    required: true
+  push:
+    description: "Push branch `escrow` to origin (needs permissions: contents: write)"
+    required: false
+    default: "true"
+runs:
+  using: "composite"
+  steps:
+    - name: Install aiescrow from this repository
+      shell: bash
+      run: python -m pip install --quiet "${{ github.action_path }}/.."
+    - name: Deposit, heartbeat, check
+      shell: bash
+      env:
+        ESCROW_ARTEFACTS: ${{ inputs.artefacts }}
+        ESCROW_BENEFICIARY_PUB: ${{ inputs.beneficiary_pub }}
+        ESCROW_DEPOSITOR_KEY: ${{ inputs.depositor_key }}
+        ESCROW_HOLDER_PUB: ${{ inputs.holder_pub }}
+        ESCROW_EXPECT_KEYID: ${{ inputs.expect_keyid }}
+        ESCROW_PUSH: ${{ inputs.push == 'true' && '1' || '0' }}
+        PYTHON: python
+      run: bash "${{ github.action_path }}/escrow.sh"
