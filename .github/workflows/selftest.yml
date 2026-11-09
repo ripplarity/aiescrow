@@ -15,14 +15,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Dummy artefact and TEST-ONLY keys (action/testdata, protect nothing)
+      - name: Dummy artefact and throwaway TEST-ONLY keys (generated here, protect nothing)
         id: k
         run: |
-          mkdir -p dummy && echo '{"memory":"selftest"}' > dummy/state.json
-          echo "depositor=$(cat action/testdata/TEST-ONLY-vendor.priv)" >> "$GITHUB_OUTPUT"
-          echo "beneficiary=$(cat action/testdata/TEST-ONLY-user.pub)" >> "$GITHUB_OUTPUT"
-          echo "holder=$(cat action/testdata/TEST-ONLY-holder.pub)" >> "$GITHUB_OUTPUT"
-          echo "keyid=$(cat action/testdata/TEST-ONLY-vendor.keyid)" >> "$GITHUB_OUTPUT"
+          python -m pip install --quiet .
+          mkdir -p dummy "$RUNNER_TEMP/k" && echo '{"memory":"selftest"}' > dummy/state.json
+          for n in vendor holder; do python -m aiescrow keygen $n --kind ed25519 --out-dir "$RUNNER_TEMP/k"; done
+          python -m aiescrow keygen user --kind x25519 --out-dir "$RUNNER_TEMP/k"
+          echo "depositor=$(cat "$RUNNER_TEMP/k/vendor.key")" >> "$GITHUB_OUTPUT"
+          echo "beneficiary=$(cat "$RUNNER_TEMP/k/user.pub")" >> "$GITHUB_OUTPUT"
+          echo "holder=$(cat "$RUNNER_TEMP/k/holder.pub")" >> "$GITHUB_OUTPUT"
+          echo "keyid=$(python -m aiescrow keyid "$RUNNER_TEMP/k/vendor.pub")" >> "$GITHUB_OUTPUT"
       - uses: ./action
         with:
           artefacts: "dummy/*.json"

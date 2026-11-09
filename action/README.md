@@ -12,3 +12,35 @@ Deposits your users' state into a git branch `escrow` on each release, so the ba
 8. Same repo means a self-held escrow: it protects against loss, not against you disappearing; say so next to the badge.
 9. Re-run on a schedule (cron) at least every 90 days to keep the heartbeat fresh.
 10. Try it offline first: `bash action/simulate.sh` (prints CHECK OK).
+
+The badge shows the last check passed against your own holder branch: proof that the deposit exists and verifies, not independent custody.
+
+Copy-paste `.github/workflows/escrow.yml`:
+
+```yaml
+name: escrow
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "0 3 1 * *"
+permissions:
+  contents: write
+jobs:
+  escrow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: <owner>/aiescrow/action@<ref>
+        with:
+          artefacts: "state/**/*.json"
+          beneficiary_pub: "<user.pub hex>"
+          depositor_key: ${{ secrets.ESCROW_DEPOSITOR_KEY }}
+          holder_pub: "<holder.pub hex>"
+          expect_keyid: "<aiescrow keyid vendor.pub>"
+```

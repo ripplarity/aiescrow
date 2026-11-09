@@ -7,6 +7,8 @@ Rules:
 3. Keep heartbeats fresh. If `check` exits 3 or 4, remove the badge until it passes again.
 4. Do not alter the text or colours of the mark. Do not imply that anyone endorses or audits your project; the badge only says that the check passes.
 
+Scope: The badge shows the last check passed against your own holder branch: proof that the deposit exists and verifies, not independent custody.
+
 Markdown:
 
 ```

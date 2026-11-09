@@ -1,1 +1,1 @@
-TEST-ONLY keys for .github/workflows/selftest.yml. Generated for this repository's self-test; they protect nothing. Never reuse.
+No key material is committed. The self-test workflow and action/simulate.sh generate throwaway TEST-ONLY keys on the fly with `aiescrow keygen`; they protect nothing.
