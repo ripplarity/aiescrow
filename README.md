@@ -44,6 +44,21 @@ Adopting it in your product: [`docs/ADOPT.md`](docs/ADOPT.md). A GitHub Action t
 | Check | `aiescrow check manifest.json --expect-keyid <vendor keyid>` (0 valid, 2 usage, 3 heartbeat expired, 4 tamper) |
 | Release | after the dead-man condition, `release` and `open` |
 
+## Before you cancel: verify your export
+
+Official exports can silently omit items, and access can end on cancel or downgrade. Check an export (directory or zip with `conversations*.json`, optional `memories/` and `attachments/`) against an expected manifest such as `{"conversations": {"count": 3, "ids": ["c1","c2","c3"]}, "memories": 2}`:
+
+```bash
+aiescrow verify-export ./export.zip --expected expected.json          # 0 complete, 6 incomplete
+aiescrow verify-export ./export --expected expected.json --snapshot ./snap1 \
+  --beneficiary-pub user.pub --depositor-key me.key --expect-keyid <my keyid>
+aiescrow snapshot-diff ./snap1 ./snap2 --expect-keyid <my keyid>      # 6 if items disappeared
+```
+
+A snapshot is a normal escrow deposit (signed manifest, `check`-able), plus a plaintext copy whose hashes are bound to the signed inventory. Exit 4 means a snapshot was altered. `snapshot-diff` exits 2 ("snapshot order") unless NEW was signed strictly after OLD, so an older snapshot passed as NEW cannot read as no loss.
+
+Limits: only items with an `id` count toward a conversation count; an empty manifest or an unknown kind is exit 2. Names are NFC-normalised on both sides before matching. A case-insensitive filesystem (Windows, default macOS) can collapse ids that differ only by case: UNTESTED. Memories are identified by file stem, so two files with the same stem in different subfolders count once. Zips are refused (exit 2) above 100,000 members or 8 GiB uncompressed (2 GiB per member), checked before and during extraction.
+
 ## Trust model
 
 - Artefacts are encrypted to the beneficiary key; the holder only ever stores ciphertext, the signed manifest and the heartbeat.

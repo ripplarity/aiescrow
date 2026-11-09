@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import typer
 
-from . import core, crypto
+from . import core, crypto, export
 
 app = typer.Typer(
     add_completion=False, no_args_is_help=True, help="User-State Escrow v0.1"
@@ -115,7 +114,13 @@ def release(
     """Write a holder-signed release record."""
     r = _run(
         lambda: core.release(
-            dir, condition, core.read_key(holder_key), now, attestation, git, expect_keyid
+            dir,
+            condition,
+            core.read_key(holder_key),
+            now,
+            attestation,
+            git,
+            expect_keyid,
         )
     )
     typer.echo(f"RELEASED condition={r['condition']} at={r['released_at']}")
@@ -139,6 +144,84 @@ def open_(
     for r in res:
         typer.echo(f"{r['name']} {r['sha256']}")
     typer.echo("HASH OK")
+
+
+@app.command(name="verify-export")
+def verify_export(
+    path: Path = typer.Argument(..., help="export directory or zip"),
+    expected: Path = typer.Option(
+        ..., help="expected manifest JSON (counts and/or ids per kind)"
+    ),
+    snapshot: Path | None = typer.Option(
+        None, help="also write a signed snapshot here"
+    ),
+    beneficiary_pub: str | None = typer.Option(
+        None, help="X25519 public key (for --snapshot)"
+    ),
+    depositor_key: str | None = typer.Option(
+        None, help="ed25519 private key (for --snapshot)"
+    ),
+    expect_keyid: str | None = typer.Option(
+        None, help="pinned keyid; the snapshot is verified with check"
+    ),
+    now: str | None = NOW,
+):
+    """Exit 0 complete, 2 usage, 4 tamper, 6 incomplete (items missing vs the expected manifest)."""
+
+    def go():
+        inv, rep = export.verify(path, expected)
+        if snapshot is not None:
+            if not (beneficiary_pub and depositor_key and expect_keyid):
+                raise core.UsageError(
+                    "--snapshot needs --beneficiary-pub, --depositor-key, --expect-keyid"
+                )
+            export.snapshot(
+                path,
+                snapshot,
+                core.read_key(beneficiary_pub),
+                core.read_key(depositor_key),
+                now,
+            )
+            export.load_snapshot(snapshot, expect_keyid, now)
+            typer.echo(f"SNAPSHOT OK {snapshot}")
+        return rep
+
+    rep = _run(go)
+    bad = False
+    for k, r in rep.items():
+        typer.echo(
+            f"{k}: expected={r['expected']} found={r['found']} missing={r['missing']}"
+            + (f" ids={','.join(r['missing_ids'])}" if r["missing_ids"] else "")
+        )
+        bad = bad or r["missing"] > 0
+    if bad:
+        typer.echo("INCOMPLETE", err=True)
+        raise typer.Exit(export.Incomplete.code)
+    typer.echo("COMPLETE")
+
+
+@app.command(name="snapshot-diff")
+def snapshot_diff(
+    old: Path,
+    new: Path,
+    expect_keyid: str = KEYID,
+    now: str | None = NOW,
+):
+    """Items in OLD but gone from NEW (both verified, NEW signed strictly later). Exit 0 none, 2 usage or order, 4 tamper, 6 disappeared."""
+
+    def go():
+        return export.diff(*export.ordered_pair(old, new, expect_keyid, now))
+
+    gone = _run(go)
+    n = 0
+    for k, ids in gone.items():
+        n += len(ids)
+        if ids:
+            typer.echo(f"{k}: disappeared {len(ids)}: {','.join(ids)}")
+    if n:
+        typer.echo("WARNING: items disappeared between snapshots", err=True)
+        raise typer.Exit(export.Incomplete.code)
+    typer.echo("NO LOSS")
 
 
 if __name__ == "__main__":

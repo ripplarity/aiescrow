@@ -577,12 +577,27 @@ def test_manifest_dsse_detects_manifest_change(env):
     )
 
 
+# attest-spec SPEC 1.4 verifier; this pin always runs, so a fresh clone checks the shipped copy
+PINNED_VERIFIER_SHA256 = (
+    "51da005156826521b9a55ecf2ad3b5eb2aeb8cf85fb9ba70f231bfce55403687"
+)
+
+
+def test_attest_verify_copy_matches_pinned_spec_revision():
+    import hashlib
+
+    mine = Path(__file__).parent.parent / "tools" / "attest_verify.py"
+    assert hashlib.sha256(mine.read_bytes()).hexdigest() == PINNED_VERIFIER_SHA256
+
+
 def test_attest_verify_copy_identical_to_spec_repo():
     import hashlib
 
     spec = Path(__file__).parent.parent.parent / "attest-spec" / "attest_verify.py"
     if not spec.exists():
         pytest.skip("attest-spec repo not alongside")
+    if hashlib.sha256(spec.read_bytes()).hexdigest() != PINNED_VERIFIER_SHA256:
+        pytest.skip("sibling attest-spec is at another revision than the pinned one")
     mine = Path(__file__).parent.parent / "tools" / "attest_verify.py"
     assert (
         hashlib.sha256(mine.read_bytes()).hexdigest()
@@ -745,7 +760,13 @@ def test_duplicate_json_keys_rejected(env):
 def test_attest_verify_requires_pin(env):
     v = Path(__file__).parent.parent / "tools" / "attest_verify.py"
     r = subprocess.run(
-        [sys.executable, str(v), str(env["out"] / "manifest.dsse.json"), "--key", str(env["out"] / "depositor.pub.hex")],
+        [
+            sys.executable,
+            str(v),
+            str(env["out"] / "manifest.dsse.json"),
+            "--key",
+            str(env["out"] / "depositor.pub.hex"),
+        ],
         capture_output=True,
         text=True,
     )
@@ -762,7 +783,9 @@ def test_writer_jcs_matches_verifier_jcs():
 
     from aiescrow.attest import jcs
 
-    spec = importlib.util.spec_from_file_location("av", Path(__file__).parent.parent / "tools" / "attest_verify.py")
+    spec = importlib.util.spec_from_file_location(
+        "av", Path(__file__).parent.parent / "tools" / "attest_verify.py"
+    )
     av = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(av)
     for o in ({"b": 1, "a": ["é", None, True]}, {"\U00010000": 1, "￿": 2}):
